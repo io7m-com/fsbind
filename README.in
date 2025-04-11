@@ -17,7 +17,7 @@ namespace. It is similar in design and goals to
 
 ### Usage
 
-The `fsbind` package provides a read-only JSR203 filesystem accessible via a
+The `fsbind` package provides a read-only JSR203 filesystem accessible via an
 `fsbind` URI scheme. To create a filesystem named `example`, call:
 
 ```
