@@ -25,11 +25,12 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.util.LinkedList;
 import java.util.Objects;
+import java.util.Optional;
 
-final class Lookup
+final class FBLookup
 {
   private static final Logger LOG =
-    LoggerFactory.getLogger(Lookup.class);
+    LoggerFactory.getLogger(FBLookup.class);
 
   private final FBFSPathAbsolute target;
   private final LinkedList<String> pathNow;
@@ -37,7 +38,7 @@ final class Lookup
   private final FBFSTree tree;
   private FBFSObjectType nodeNow;
 
-  Lookup(
+  FBLookup(
     final FBFSPathAbsolute inTarget)
   {
     this.target =
@@ -55,10 +56,24 @@ final class Lookup
     this.pathNow.add(this.pathPartsRemaining.pop());
   }
 
+  public Optional<FBFSObjectType> lookupOrMissing()
+    throws AccessDeniedException
+  {
+    try {
+      return Optional.of(this.lookup());
+    } catch (final NoSuchFileException e) {
+      return Optional.empty();
+    } catch (final AccessDeniedException e) {
+      throw e;
+    }
+  }
+
   public FBFSObjectType lookup()
     throws NoSuchFileException, AccessDeniedException
   {
-    LOG.trace("Lookup: {}", this.pathNow);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Lookup: {}", this.pathNow);
+    }
 
     if (this.pathPartsRemaining.isEmpty()) {
       return this.nodeNow;

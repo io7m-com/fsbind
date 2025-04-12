@@ -41,9 +41,9 @@ final FBFilesystem filesystem =
   (FBFilesystem) FileSystems.newFileSystem(URI.create("fsbind:example:/"), null);
 ```
 
-The `fsbind` filesystem exposes a strict, UNIX-like virtual filesystem
-consisting of _virtual directories_ and other JSR203 filesystems mounted into
-filesystem tree.
+The `fsbind` filesystem exposes a strict, read-only, in-memory UNIX-like virtual
+filesystem consisting of _virtual directories_ and other JSR203 filesystems
+mounted into filesystem tree.
 
 For example, to create a directory hierarchy and mount a zip file into it, it's
 first necessary to create a directory in the filesystem. This directory is
@@ -103,4 +103,107 @@ We would then be able to access `x/a.txt` by opening `/archives/zip0/a.txt`:
 ```
 Files.readString(dir.resolve("a.txt"));
 ```
+
+### Capabilities
+
+The `fsbind` filesystem is a minimal abstraction over existing JSR203
+filesystems and, in most cases, simply delegates operations to those
+filesystems directly. Operations that imply write access will typically
+result in a `FilesystemException` being raised.
+
+The semantics of real filesystems are generally not very well documented, and
+filesystems differ immensely across platforms. Furthermore, JSR203 filesystem
+implementations have a great deal of freedom in how they're implemented
+internally, and a `fsbind` filesystem usually consists of a set of filesystems
+which may have very different semantics individually placed into a single
+unified namespace. Additionally, `fsbind` takes a much stricter view with
+respect to [paths](#paths) than JSR203 filesystems usually do. You can, if
+you are particularly unhinged, mount an `fsbind` filesystem inside an `fsbind`
+filesystem (although they are required to be different instances). This is
+not recommended.
+
+Therefore, assume the following rules of thumb:
+
+  * If you know a directory is a _virtual directory_ that you created, and
+    you haven't mounted anything over the top of it, then you can safely create
+    directories inside it.
+  * You can delete an empty directory that you created.
+  * You can only rely on [BasicFileAttributes](https://docs.oracle.com/en/java/javase/21/docs/api/java.base/java/nio/file/attribute/BasicFileAttributes.html)
+    being available. Trying to use anything else will almost certainly
+    result in an exception.
+  * You cannot create files.
+  * You cannot modify files (including setting file attributes and/or renaming).
+  * You cannot delete files.
+  * You cannot create directories _inside mounted filesystems_.
+  * You cannot delete directories _inside mounted filesystems_.
+  * You can use the [WatchService](#watch-service), but it might not be
+    particularly efficient compared to native services.
+  * You should use _absolute_ paths as much as possible; treat
+    _relative_ paths as intermediate values and avoid passing them to the
+    filesystem. Most operations require _absolute_ paths and will raise
+    exceptions if presented with _relative_ paths.
+
+#### Paths
+
+An `fsbind` filesystem uses UNIX-like paths. Outside of mounted filesystems,
+paths are case-insensitive. All resources, whatever the underlying filesystem,
+are accessed with `fsbind` paths.
+
+The `fsbind` filesystem has no concept of a "current directory" and therefore
+the provider requires the use of _absolute_ instead of _relative_ paths in most
+instances.
+
+A _path component_ is a string not containing `/` and not equal to `.`, `..`,
+or `...`.
+
+An _absolute path_ is the string "/" followed by a list of _path components_.
+
+A _relative path_ is a non-empty list of _path components_.
+
+As examples, the following paths are all valid:
+
+```
+/
+/a
+/CAS.qterm/CyberAcme Systems/pty0
+a/b/c
+a
+```
+
+As examples, the following paths are not valid:
+
+```
+/.
+/..
+/CAS.qterm/.../pty0
+
+.
+```
+
+#### Watch Service
+
+The `fsbind` filesystem provides a simple-minded [WatchService](https://docs.oracle.com/en/java/javase/21/docs//api/java.base/java/nio/file/WatchService.html)
+implementation that spawns one virtual thread per registered path, and
+checks the modification times on those paths at a configurable rate in order
+to deliver watch events.
+
+It's possible to specify the rate that will be used by providing a configuration
+value in the environment map used to create the filesystem:
+
+```
+FileSystems.newFileSystem(
+  "fsbind:example:/",
+  Map.of(
+    FBFilesystemProvider.environmentWatchServiceDurationKey(),
+    Duration.ofMillis(250L)
+  )
+);
+```
+
+The provided `Duration` value is the amount of time that each virtual thread
+will pause between file checks. Smaller values will check more often, publish
+events more promptly, and entail more file I/O.
+
+Note that this is unlikely to be anywhere near as performant as the native
+`WatchService` provided by the JVM for real filesystems.
 

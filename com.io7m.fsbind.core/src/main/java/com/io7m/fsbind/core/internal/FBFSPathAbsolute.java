@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Objects;
 
 import static com.io7m.fsbind.core.internal.FBFS.FBFS_SEPARATOR;
+import static com.io7m.fsbind.core.internal.FBFSPathComponents.componentsEquals;
 
 /**
  * An absolute path.
@@ -101,7 +102,7 @@ public final class FBFSPathAbsolute implements FBFSPathType
       return false;
     }
     return Objects.equals(this.filesystem, paths.filesystem)
-           && Objects.equals(this.components, paths.components);
+           && componentsEquals(this.components, paths.components);
   }
 
   @Override
@@ -205,7 +206,10 @@ public final class FBFSPathAbsolute implements FBFSPathType
       return false;
     }
 
-    return prefixPath.components.equals(this.components.subList(0, prefixSize));
+    return componentsEquals(
+      prefixPath.components,
+      this.components.subList(0, prefixSize)
+    );
   }
 
   private FBFSPathAbsolute checkPathAbsoluteCompatible(
@@ -278,7 +282,8 @@ public final class FBFSPathAbsolute implements FBFSPathType
       return false;
     }
 
-    return suffixPath.components().equals(
+    return componentsEquals(
+      suffixPath.components(),
       this.components.subList(thisSize - suffixSize, thisSize)
     );
   }
@@ -367,14 +372,18 @@ public final class FBFSPathAbsolute implements FBFSPathType
     final WatchEvent.Kind<?>[] events,
     final WatchEvent.Modifier... modifiers)
   {
-    throw new UnsupportedOperationException();
+    if (watcher instanceof final FBFSWatchService fbWatch) {
+      return fbWatch.register(this, events);
+    } else {
+      throw new ProviderMismatchException();
+    }
   }
 
   @Override
   public int compareTo(
     final Path other)
   {
-    return this.toString().compareTo(other.toString());
+    return this.toString().compareToIgnoreCase(other.toString());
   }
 
   /**

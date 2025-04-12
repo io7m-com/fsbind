@@ -376,7 +376,7 @@ public class FBRelativePathTest
   }
 
   @Test
-  public void testRelativeEnds()
+  public void testRelativeEnds0()
     throws Exception
   {
     try (final var fs = createFS()) {
@@ -385,6 +385,48 @@ public class FBRelativePathTest
       assertTrue(
         p.endsWith(q),
         "%s ends with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testRelativeEnds1()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath("a", "b", "c");
+      final var q = fs.getPath("B", "C");
+      assertTrue(
+        p.endsWith(q),
+        "%s ends with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testRelativeStarts0()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath("a", "b", "c");
+      final var q = fs.getPath("a", "b");
+      assertTrue(
+        p.startsWith(q),
+        "%s starts with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testRelativeStarts1()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath("a", "b", "c");
+      final var q = fs.getPath("A", "B");
+      assertTrue(
+        p.startsWith(q),
+        "%s starts with %s".formatted(p, q)
       );
     }
   }

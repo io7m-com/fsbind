@@ -37,12 +37,15 @@ import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.ProviderMismatchException;
+import java.nio.file.ReadOnlyFileSystemException;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.FileAttributeView;
 import java.nio.file.spi.FileSystemProvider;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -54,6 +57,14 @@ public final class FBFilesystemProvider
 {
   private static final Logger LOG =
     LoggerFactory.getLogger(FBFilesystemProvider.class);
+
+  private static final String WATCH_SERVICE_DURATION =
+    "fsbind.WatchServiceDuration";
+
+  private static final Map<String, Object> DEFAULT_ENVIRONMENT =
+    Map.ofEntries(
+      Map.entry(WATCH_SERVICE_DURATION, Duration.ofSeconds(5L))
+    );
 
   private final Object filesystemsLock;
   private final HashMap<String, FBFS> filesystems;
@@ -68,26 +79,22 @@ public final class FBFilesystemProvider
     this.filesystemsLock = new Object();
   }
 
-  @Override
-  public String getScheme()
+  /**
+   * @return The default environment used by {@code fsbind} filesystems
+   */
+
+  public static Map<String, Object> environmentDefault()
   {
-    return "fsbind";
+    return DEFAULT_ENVIRONMENT;
   }
 
-  @Override
-  public FBFilesystem newFileSystem(
-    final URI uri,
-    final Map<String, ?> env)
-  {
-    return this.filesystemOf(uri, true);
-  }
+  /**
+   * @return {@code "fsbind.WatchServiceDuration"}
+   */
 
-  private record FBFilesystemURI(
-    String scheme,
-    String name,
-    String path)
+  public static String environmentWatchServiceDurationKey()
   {
-
+    return WATCH_SERVICE_DURATION;
   }
 
   private static FBFilesystemURI filesystemURIOf(
@@ -117,11 +124,51 @@ public final class FBFilesystemProvider
     );
   }
 
+  private static RuntimeException absolutePathRequired(
+    final Path dir)
+  {
+    if (dir instanceof FBFSPathRelative) {
+      return new IllegalArgumentException(
+        "Path '%s' must be an absolute fsbind path."
+          .formatted(dir)
+      );
+    }
+
+    return new ProviderMismatchException(
+      "Path '%s' must be an absolute fsbind path (but is of type %s)."
+        .formatted(dir, dir.getClass().getName())
+    );
+  }
+
+  @Override
+  public String getScheme()
+  {
+    return "fsbind";
+  }
+
+  @Override
+  public FBFilesystem newFileSystem(
+    final URI uri,
+    final Map<String, ?> env)
+  {
+    return this.filesystemOf(
+      uri,
+      true,
+      Objects.requireNonNullElse(env, Map.of())
+    );
+  }
+
   private FBFilesystem filesystemOf(
     final URI uri,
-    final boolean create)
+    final boolean create,
+    final Map<String, ?> env)
   {
+    Objects.requireNonNull(uri, "uri");
+    Objects.requireNonNull(env, "env");
+
     final var fsuri = filesystemURIOf(uri);
+    final var actualEnv = new HashMap<>(environmentDefault());
+    actualEnv.putAll(env);
 
     synchronized (this.filesystemsLock) {
       final var existing = this.filesystems.get(fsuri.name);
@@ -130,7 +177,7 @@ public final class FBFilesystemProvider
       }
 
       if (create) {
-        final var newFs = new FBFS(this, fsuri.name);
+        final var newFs = new FBFS(this, fsuri.name, actualEnv);
         newFs.setOnClose(() -> {
           synchronized (this.filesystemsLock) {
             this.filesystems.remove(fsuri.name);
@@ -149,7 +196,7 @@ public final class FBFilesystemProvider
   public FBFilesystem getFileSystem(
     final URI uri)
   {
-    return this.filesystemOf(uri, false);
+    return this.filesystemOf(uri, false, Map.of());
   }
 
   @Override
@@ -184,22 +231,6 @@ public final class FBFilesystemProvider
     } else {
       throw absolutePathRequired(dir);
     }
-  }
-
-  private static RuntimeException absolutePathRequired(
-    final Path dir)
-  {
-    if (dir instanceof FBFSPathRelative) {
-      return new IllegalArgumentException(
-        "Path '%s' must be an absolute fsbind path."
-          .formatted(dir)
-      );
-    }
-
-    return new ProviderMismatchException(
-      "Path '%s' must be an absolute fsbind path (but is of type %s)."
-        .formatted(dir, dir.getClass().getName())
-    );
   }
 
   @Override
@@ -255,8 +286,17 @@ public final class FBFilesystemProvider
     final Path source,
     final Path target,
     final CopyOption... options)
+    throws FileSystemException
   {
-    throw new UnsupportedOperationException();
+    if (source instanceof final FBFSPathAbsolute pSource) {
+      if (target instanceof final FBFSPathAbsolute pTarget) {
+        pSource.getFileSystem().opMove(pSource, pTarget, options);
+      } else {
+        throw absolutePathRequired(target);
+      }
+    } else {
+      throw absolutePathRequired(source);
+    }
   }
 
   @Override
@@ -264,7 +304,7 @@ public final class FBFilesystemProvider
     final Path path,
     final Path path2)
   {
-    throw new UnsupportedOperationException();
+    return path.compareTo(path2) == 0;
   }
 
   @Override
@@ -308,8 +348,13 @@ public final class FBFilesystemProvider
     final Path path,
     final Class<A> type,
     final LinkOption... options)
+    throws IOException
   {
-    throw new UnsupportedOperationException();
+    if (path instanceof final FBFSPathAbsolute absPath) {
+      return absPath.getFileSystem().opReadAttributes(absPath, type, options);
+    } else {
+      throw absolutePathRequired(path);
+    }
   }
 
   @Override
@@ -328,6 +373,14 @@ public final class FBFilesystemProvider
     final Object value,
     final LinkOption... options)
   {
-    throw new UnsupportedOperationException();
+    throw new ReadOnlyFileSystemException();
+  }
+
+  private record FBFilesystemURI(
+    String scheme,
+    String name,
+    String path)
+  {
+
   }
 }

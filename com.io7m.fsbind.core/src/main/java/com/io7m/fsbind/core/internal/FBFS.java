@@ -20,6 +20,7 @@ package com.io7m.fsbind.core.internal;
 import com.io7m.fsbind.core.FBFilesystem;
 import com.io7m.fsbind.core.FBFilesystemProvider;
 import com.io7m.fsbind.core.FBMountRequest;
+import com.io7m.fsbind.core.FBMountedFilesystem;
 import com.io7m.jaffirm.core.Preconditions;
 import com.io7m.jmulticlose.core.CloseableCollection;
 import com.io7m.jmulticlose.core.CloseableCollectionType;
@@ -36,22 +37,30 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AccessMode;
+import java.nio.file.CopyOption;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.ProviderMismatchException;
 import java.nio.file.ReadOnlyFileSystemException;
 import java.nio.file.WatchService;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.UserPrincipalLookupService;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -70,6 +79,11 @@ public final class FBFS
   private static final Logger LOG =
     LoggerFactory.getLogger(FBFS.class);
 
+  private static final String IS_DIRECTORY =
+    "The target path is a directory";
+  private static final String NOT_A_FILESYSTEM_MOUNT =
+    "Not a filesystem mount.";
+
   private final FBFilesystemProvider provider;
   private final String name;
   private final AtomicBoolean closed;
@@ -77,17 +91,20 @@ public final class FBFS
   private final CopyOnWriteArrayList<FBMount> mounts;
   private final FBFSTree tree;
   private final FBFSPathAbsolute rootPath;
+  private final Map<String, ?> environment;
 
   /**
    * The {@code fsbind} filesystem.
    *
    * @param inProvider The provider
    * @param inName     The filesystem name
+   * @param env        The environment
    */
 
   public FBFS(
     final FBFilesystemProvider inProvider,
-    final String inName)
+    final String inName,
+    final Map<String, ?> env)
   {
     this.provider =
       Objects.requireNonNull(inProvider, "provider");
@@ -95,11 +112,23 @@ public final class FBFS
       Objects.requireNonNull(inName, "name");
     this.closed =
       new AtomicBoolean(false);
-    this.tree =
-      FBFSTree.createWithRoot(
-        new FBFSObjectVirtualDirectory("/", Optional.empty())
+
+    final var rootNode =
+      new FBFSObjectVirtualDirectory(
+        new FBVirtualDirectoryAttributes(),
+        "/",
+        Optional.empty()
       );
 
+    final var now = FileTime.from(Instant.now());
+    rootNode.attributes().setCreationTime(now);
+    rootNode.attributes().setLastAccessTime(now);
+    rootNode.attributes().setLastModifiedTime(now);
+
+    this.tree =
+      FBFSTree.createWithRoot(rootNode);
+    this.environment =
+      Map.copyOf(env);
     this.mounts =
       new CopyOnWriteArrayList<>();
     this.rootPath =
@@ -217,7 +246,11 @@ public final class FBFS
   {
     this.checkNotClosed();
 
-    throw new UnsupportedOperationException();
+    return new FBFSWatchService(
+      (Duration) this.environment.get(
+        FBFilesystemProvider.environmentWatchServiceDurationKey()
+      )
+    );
   }
 
   /**
@@ -251,7 +284,7 @@ public final class FBFS
     this.checkNotClosed();
     this.checkPathBelongs(path);
 
-    return switch (new Lookup(path).lookup()) {
+    return switch (new FBLookup(path).lookup()) {
       case final FBFSObjectMount mount -> {
         yield Files.newDirectoryStream(mount.mount().basePath(), filter);
       }
@@ -276,7 +309,9 @@ public final class FBFS
     final FBFSPathAbsolute path)
     throws FileSystemException
   {
-    LOG.trace("CreateDirectory: {}", path);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("CreateDirectory: {}", path);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(path);
@@ -285,7 +320,7 @@ public final class FBFS
       return;
     }
 
-    switch (new Lookup(path.getParent()).lookup()) {
+    switch (new FBLookup(path.getParent()).lookup()) {
       case final FBFSObjectMount ignored -> {
         throw new ReadOnlyFileSystemException();
       }
@@ -295,12 +330,20 @@ public final class FBFS
       case final FBFSObjectVirtualDirectory parentNode -> {
         final var newNode =
           new FBFSObjectVirtualDirectory(
+            new FBVirtualDirectoryAttributes(),
             path.components().getLast(),
             Optional.empty()
           );
 
+        final var now = FileTime.from(Instant.now());
+        newNode.attributes().setCreationTime(now);
+        newNode.attributes().setLastAccessTime(now);
+        newNode.attributes().setLastModifiedTime(now);
+
         if (this.tree.appendIfNameFree(parentNode, newNode)) {
-          LOG.trace("CreatedDirectory: {}", path);
+          if (LOG.isTraceEnabled()) {
+            LOG.trace("CreatedDirectory: {}", path);
+          }
         }
       }
     }
@@ -326,7 +369,9 @@ public final class FBFS
     final FBFSPathAbsolute path)
     throws FileSystemException
   {
-    LOG.trace("DeleteDirectory: {}", path);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("DeleteDirectory: {}", path);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(path);
@@ -335,7 +380,7 @@ public final class FBFS
       throw new AccessDeniedException("Cannot delete the root directory");
     }
 
-    final var lookup = new Lookup(path);
+    final var lookup = new FBLookup(path);
     switch (lookup.lookup()) {
       case final FBFSObjectMount ignored -> {
         throw new ReadOnlyFileSystemException();
@@ -345,7 +390,9 @@ public final class FBFS
       }
       case final FBFSObjectVirtualDirectory virtual -> {
         if (this.tree.deleteIfEmpty(virtual)) {
-          LOG.trace("DeletedDirectory: {}", path);
+          if (LOG.isTraceEnabled()) {
+            LOG.trace("DeletedDirectory: {}", path);
+          }
         } else {
           throw new DirectoryNotEmptyException(path.toString());
         }
@@ -378,15 +425,25 @@ public final class FBFS
     throws FileSystemException
   {
     final var modeList = List.of(modes);
-    LOG.trace("CheckAccess: {} {}", path, modeList);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("CheckAccess: {} {}", path, modeList);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(path);
 
-    new Lookup(path).lookup();
+    new FBLookup(path).lookup();
     if (modeList.contains(AccessMode.WRITE)) {
       throw new ReadOnlyFileSystemException();
     }
+  }
+
+  @Override
+  public List<FBMountedFilesystem> mountedFilesystems()
+  {
+    return this.mounts.stream()
+      .map(m -> new FBMountedFilesystem(m.mountPoint(), m.basePath()))
+      .toList();
   }
 
   @Override
@@ -407,13 +464,64 @@ public final class FBFS
     }
   }
 
+  @Override
+  public void unmount(
+    final Path path)
+    throws FileSystemException
+  {
+    this.checkNotClosed();
+
+    if (path instanceof final FBFSPathAbsolute mountAt) {
+      this.checkPathBelongs(mountAt);
+      this.opUnmount(mountAt);
+    } else {
+      throw new ProviderMismatchException();
+    }
+  }
+
+  @FSOp
+  private void opUnmount(
+    final FBFSPathAbsolute path)
+    throws FileSystemException
+  {
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Unmount {}", path);
+    }
+
+    switch (new FBLookup(path).lookup()) {
+      case final FBFSObjectMount mount -> {
+        this.tree.unmount(mount);
+        this.mounts.remove(mount.mount());
+        if (LOG.isTraceEnabled()) {
+          LOG.trace("Unmounted {}", path);
+        }
+      }
+      case final FBFSObjectReal ignored -> {
+        throw new FileSystemException(
+          path.toString(),
+          null,
+          NOT_A_FILESYSTEM_MOUNT
+        );
+      }
+      case final FBFSObjectVirtualDirectory ignored -> {
+        throw new FileSystemException(
+          path.toString(),
+          null,
+          NOT_A_FILESYSTEM_MOUNT
+        );
+      }
+    }
+  }
+
   @FSOp
   private void opMount(
     final Path path,
     final FBFSPathAbsolute mountAt)
     throws FileSystemException
   {
-    LOG.trace("Mount {} ({}) -> {}", path, path.getFileSystem(), mountAt);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Mount {} ({}) -> {}", path, path.getFileSystem(), mountAt);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(mountAt);
@@ -421,18 +529,26 @@ public final class FBFS
     final var mount =
       new FBMount(mountAt, path);
     final var existing =
-      new Lookup(mountAt).lookup();
+      new FBLookup(mountAt).lookup();
 
     final var newNode =
       new FBFSObjectMount(
         mountAt.getFileName().toString(),
         mount,
-        Optional.of(existing)
+        new FBVirtualDirectoryAttributes(),
+        existing
       );
 
-    this.tree.replaceWithMount(existing, newNode);
+    final var now = FileTime.from(Instant.now());
+    newNode.attributes().setCreationTime(now);
+    newNode.attributes().setLastAccessTime(now);
+    newNode.attributes().setLastModifiedTime(now);
+
+    this.tree.replaceWith(existing, newNode);
     this.mounts.add(mount);
-    LOG.trace("Mounted {} ({}) -> {}", path, path.getFileSystem(), mountAt);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Mounted {} ({}) -> {}", path, path.getFileSystem(), mountAt);
+    }
   }
 
   /**
@@ -451,13 +567,15 @@ public final class FBFS
     final Set<? extends OpenOption> options)
     throws IOException
   {
-    LOG.trace("NewByteChannel {} ({})", path, options);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("NewByteChannel {} ({})", path, options);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(path);
 
     final var lookup =
-      new Lookup(path);
+      new FBLookup(path);
     final var node =
       lookup.lookup();
 
@@ -466,14 +584,14 @@ public final class FBFS
     }
 
     return switch (node) {
-      case final FBFSObjectMount ignored -> {
-        throw new AccessDeniedException(path.toString());
-      }
       case final FBFSObjectReal real -> {
         yield Files.newByteChannel(real.path(), Set.of());
       }
+      case final FBFSObjectMount ignored -> {
+        throw new FileSystemException(path.toString(), null, IS_DIRECTORY);
+      }
       case final FBFSObjectVirtualDirectory ignored -> {
-        throw new AccessDeniedException(path.toString());
+        throw new FileSystemException(path.toString(), null, IS_DIRECTORY);
       }
     };
   }
@@ -503,13 +621,15 @@ public final class FBFS
     final Set<? extends OpenOption> options)
     throws IOException
   {
-    LOG.trace("NewFileChannel {} ({})", path, options);
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("NewFileChannel {} ({})", path, options);
+    }
 
     this.checkNotClosed();
     this.checkPathBelongs(path);
 
     final var lookup =
-      new Lookup(path);
+      new FBLookup(path);
     final var node =
       lookup.lookup();
 
@@ -518,14 +638,14 @@ public final class FBFS
     }
 
     return switch (node) {
-      case final FBFSObjectMount ignored -> {
-        throw new AccessDeniedException(path.toString());
-      }
       case final FBFSObjectReal real -> {
         yield FileChannel.open(real.path(), Set.of());
       }
+      case final FBFSObjectMount ignored -> {
+        throw new FileSystemException(path.toString(), null, IS_DIRECTORY);
+      }
       case final FBFSObjectVirtualDirectory ignored -> {
-        throw new AccessDeniedException(path.toString());
+        throw new FileSystemException(path.toString(), null, IS_DIRECTORY);
       }
     };
   }
@@ -540,6 +660,116 @@ public final class FBFS
   }
 
   /**
+   * @param path    The path
+   * @param type    The type
+   * @param options The options
+   * @param <A>     The type of attributes
+   *
+   * @return The attributes
+   *
+   * @throws IOException On errors
+   * @see Files#getAttribute(Path, String, LinkOption...)
+   */
+
+  @FSOp
+  public <A extends BasicFileAttributes> A opReadAttributes(
+    final FBFSPathAbsolute path,
+    final Class<A> type,
+    final LinkOption[] options)
+    throws IOException
+  {
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("ReadAttributes {} ({})", path, options);
+    }
+
+    this.checkNotClosed();
+    this.checkPathBelongs(path);
+
+    if (Objects.equals(type, BasicFileAttributes.class)) {
+      return switch (new FBLookup(path).lookup()) {
+        case final FBFSObjectMount v -> {
+          yield (A) v.attributes();
+        }
+        case final FBFSObjectVirtualDirectory v -> {
+          yield (A) v.attributes();
+        }
+        case final FBFSObjectReal real -> {
+          yield Files.readAttributes(real.path(), type, options);
+        }
+      };
+    } else {
+      throw new UnsupportedOperationException(
+        "Unsupported attribute type: %s".formatted(type)
+      );
+    }
+  }
+
+  /**
+   * @param pSource The source
+   * @param pTarget The target
+   * @param options The options
+   *
+   * @see Files#move(Path, Path, CopyOption...)
+   */
+
+  @FSOp
+  public void opMove(
+    final FBFSPathAbsolute pSource,
+    final FBFSPathAbsolute pTarget,
+    final CopyOption[] options)
+    throws FileSystemException
+  {
+    if (LOG.isTraceEnabled()) {
+      LOG.trace("Move {} -> {} ({})", pSource, pTarget, options);
+    }
+
+    this.checkNotClosed();
+    this.checkPathBelongs(pSource);
+    this.checkPathBelongs(pTarget);
+
+    if (pSource.isRoot()) {
+      throw new IllegalArgumentException(
+        "Cannot rename the root directory."
+      );
+    }
+    if (pTarget.isRoot()) {
+      throw new IllegalArgumentException(
+        "Cannot rename to the root directory."
+      );
+    }
+
+    final var sourceLookup =
+      new FBLookup(pSource);
+    final var targetLookup =
+      new FBLookup(pTarget);
+
+    switch (sourceLookup.lookup()) {
+      case final FBFSObjectMount ignored -> {
+        throw new UnsupportedOperationException();
+      }
+
+      case final FBFSObjectReal ignored -> {
+        throw new ReadOnlyFileSystemException();
+      }
+
+      case final FBFSObjectVirtualDirectory source -> {
+        final var targetOpt = targetLookup.lookupOrMissing();
+        if (targetOpt.isPresent()) {
+          throw new FileAlreadyExistsException(pTarget.toString());
+        }
+
+        this.tree.rename(
+          source,
+          pTarget.getFileName().toString()
+        );
+        if (LOG.isTraceEnabled()) {
+          LOG.trace("Moved {} -> {}", pSource, pTarget);
+        }
+      }
+    }
+  }
+
+  /**
    * An annotation that indicates that a method is a fundamental filesystem
    * operation. For documentation purposes only.
    */
@@ -549,4 +779,5 @@ public final class FBFS
   public @interface FSOp
   {
   }
+
 }

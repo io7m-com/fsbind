@@ -34,6 +34,33 @@ public final class FBFSPathComponents
   }
 
   /**
+   * Compare components.
+   *
+   * @param p The first components
+   * @param q The second components
+   *
+   * @return {@code true} if the components are equal
+   */
+
+  public static boolean componentsEquals(
+    final List<String> p,
+    final List<String> q)
+  {
+    Objects.requireNonNull(p, "p");
+    Objects.requireNonNull(q, "q");
+
+    if (p.size() == q.size()) {
+      for (int index = 0; index < p.size(); ++index) {
+        if (!p.get(index).equalsIgnoreCase(q.get(index))) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Validate a path component.
    *
    * @param path      The full path, for error messages

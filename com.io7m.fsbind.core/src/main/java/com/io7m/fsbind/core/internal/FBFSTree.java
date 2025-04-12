@@ -191,15 +191,15 @@ public final class FBFSTree
   }
 
   /**
-   * Replace the given node with a mount
+   * Replace the given node with a different node.
    *
    * @param existing The existing node
-   * @param newNode  The mount
+   * @param newNode  The new node
    */
 
-  public void replaceWithMount(
+  public void replaceWith(
     final FBFSObjectType existing,
-    final FBFSObjectMount newNode)
+    final FBFSObjectType newNode)
   {
     Objects.requireNonNull(existing, "existing");
     Objects.requireNonNull(newNode, "newNode");
@@ -242,6 +242,34 @@ public final class FBFSTree
     synchronized (this.treeLock) {
       return Set.copyOf(this.tree.outgoingEdgesOf(directory));
     }
+  }
+
+  /**
+   * Rename the given node.
+   *
+   * @param source The source
+   * @param name   The new name
+   */
+
+  public void rename(
+    final FBFSObjectVirtualDirectory source,
+    final String name)
+  {
+    synchronized (this.treeLock) {
+      source.setName(name);
+    }
+  }
+
+  /**
+   * Unmount the given node.
+   *
+   * @param mount The mount
+   */
+
+  public void unmount(
+    final FBFSObjectMount mount)
+  {
+    this.replaceWith(mount, mount.shadowedObject());
   }
 
   private static final class FBFSNodeDirectoryStream

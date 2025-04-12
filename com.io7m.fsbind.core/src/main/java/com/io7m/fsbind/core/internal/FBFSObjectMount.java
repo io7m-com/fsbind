@@ -22,16 +22,22 @@ import java.util.Optional;
 /**
  * An object in the filesystem tree that represents a mount point.
  *
- * @param name     The name
- * @param mount    The mount
- * @param shadowed The node this node shadows, if any
+ * @param name           The name
+ * @param mount          The mount
+ * @param attributes     The attributes
+ * @param shadowedObject The node this node shadows
  */
 
 public record FBFSObjectMount(
   String name,
   FBMount mount,
-  Optional<FBFSObjectType> shadowed)
+  FBVirtualDirectoryAttributes attributes,
+  FBFSObjectType shadowedObject)
   implements FBFSObjectType
 {
-
+  @Override
+  public Optional<FBFSObjectType> shadowed()
+  {
+    return Optional.of(this.shadowedObject);
+  }
 }

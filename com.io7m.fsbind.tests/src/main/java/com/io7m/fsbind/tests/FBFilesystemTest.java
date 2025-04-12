@@ -18,11 +18,14 @@
 package com.io7m.fsbind.tests;
 
 import com.io7m.fsbind.core.FBFilesystem;
+import com.io7m.fsbind.core.FBFilesystemProvider;
 import com.io7m.fsbind.core.FBMountRequest;
+import com.io7m.fsbind.core.FBMountedFilesystem;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DynamicTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestFactory;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,6 +35,7 @@ import java.net.URI;
 import java.nio.channels.FileChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileSystemException;
 import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -39,16 +43,19 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.ReadOnlyFileSystemException;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -285,20 +292,20 @@ public final class FBFilesystemTest
         assertThrows(NoSuchFileException.class, () -> {
           FileChannel.open(dir.resolve("x"));
         });
-        assertThrows(AccessDeniedException.class, () -> {
+        assertThrows(FileSystemException.class, () -> {
           FileChannel.open(dir);
         });
-        assertThrows(AccessDeniedException.class, () -> {
+        assertThrows(FileSystemException.class, () -> {
           FileChannel.open(fs.getPath("/"));
         });
 
         assertThrows(NoSuchFileException.class, () -> {
           Files.newByteChannel(dir.resolve("x"));
         });
-        assertThrows(AccessDeniedException.class, () -> {
+        assertThrows(FileSystemException.class, () -> {
           Files.newByteChannel(dir);
         });
-        assertThrows(AccessDeniedException.class, () -> {
+        assertThrows(FileSystemException.class, () -> {
           Files.newByteChannel(fs.getPath("/"));
         });
 
@@ -394,10 +401,236 @@ public final class FBFilesystemTest
     }
   }
 
+  @Test
+  public void testMountUnmount()
+    throws Exception
+  {
+    final var zip =
+      this.resource("nested.zip");
+    final var zipUri =
+      URI.create("jar:file:" + zip);
+
+    try (final var zipfs = FileSystems.newFileSystem(zipUri, Map.of(), null)) {
+      try (final var fs = createFS()) {
+        final var dir = fs.getPath("/", "a");
+        Files.createDirectories(dir);
+
+        assertThrows(FileSystemException.class, () -> {
+          fs.unmount(fs.getPath("/"));
+        });
+
+        final var root = zipfs.getRootDirectories().iterator().next();
+        fs.mount(new FBMountRequest(root, dir));
+        assertEquals(
+          List.of(new FBMountedFilesystem(dir, root)),
+          fs.mountedFilesystems()
+        );
+
+        final var aTxt = dir.resolve("x").resolve("a.txt");
+        assertEquals("Hello X A\n", Files.readString(aTxt));
+
+        assertThrows(FileSystemException.class, () -> {
+          fs.unmount(aTxt);
+        });
+
+        fs.unmount(dir);
+        assertFalse(Files.exists(aTxt));
+        assertEquals(List.of(), fs.mountedFilesystems());
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 5L, unit = TimeUnit.SECONDS)
+  public void testWatchFileModified(
+    final @TempDir Path mountDir)
+    throws Exception
+  {
+    Files.writeString(mountDir.resolve("a.txt"), "Hello!");
+
+    try (final var fs = createFS()) {
+      final var dir = fs.getPath("/", "z");
+      final var f = dir.resolve("a.txt");
+      Files.createDirectories(dir);
+      fs.mount(new FBMountRequest(mountDir, dir));
+
+      try (final var watch = fs.newWatchService()) {
+        f.register(watch, ENTRY_MODIFY);
+
+        Thread.ofVirtual()
+          .start(() -> {
+            LOG.trace("Waiting to write...");
+
+            try {
+              Thread.sleep(1_000L);
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+
+            LOG.trace("Writing...");
+
+            try {
+              Files.writeString(mountDir.resolve("a.txt"), "Goodbye!");
+            } catch (final IOException e) {
+              throw new RuntimeException(e);
+            }
+
+            LOG.trace("Written.");
+          });
+
+        while (true) {
+          final var wk = watch.take();
+          for (final var event : wk.pollEvents()) {
+            final var changed = (Path) event.context();
+            assertEquals(changed, f);
+            return;
+          }
+          wk.reset();
+        }
+      }
+    }
+  }
+
+  @Test
+  @Timeout(value = 5L, unit = TimeUnit.SECONDS)
+  public void testWatchFileCreated(
+    final @TempDir Path mountDir)
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var dir = fs.getPath("/", "z");
+      final var f = dir.resolve("a.txt");
+      Files.createDirectories(dir);
+      fs.mount(new FBMountRequest(mountDir, dir));
+
+      try (final var watch = fs.newWatchService()) {
+        f.register(watch, ENTRY_CREATE);
+
+        Thread.ofVirtual()
+          .start(() -> {
+            LOG.trace("Waiting to write...");
+
+            try {
+              Thread.sleep(1_000L);
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+
+            LOG.trace("Writing...");
+
+            try {
+              Files.writeString(mountDir.resolve("a.txt"), "Goodbye!");
+            } catch (final IOException e) {
+              throw new RuntimeException(e);
+            }
+
+            LOG.trace("Written.");
+          });
+
+        while (true) {
+          final var wk = watch.take();
+          for (final var event : wk.pollEvents()) {
+            final var changed = (Path) event.context();
+            assertEquals(changed, f);
+            return;
+          }
+          wk.reset();
+        }
+      }
+    }
+  }
+
+  @Test
+  // @Timeout(value = 5L, unit = TimeUnit.SECONDS)
+  public void testWatchFileDeleted(
+    final @TempDir Path mountDir)
+    throws Exception
+  {
+    Files.writeString(mountDir.resolve("a.txt"), "Goodbye!");
+
+    try (final var fs = createFS()) {
+      final var dir = fs.getPath("/", "z");
+      final var f = dir.resolve("a.txt");
+      Files.createDirectories(dir);
+      fs.mount(new FBMountRequest(mountDir, dir));
+
+      try (final var watch = fs.newWatchService()) {
+        f.register(watch, ENTRY_DELETE);
+
+        Thread.ofVirtual()
+          .start(() -> {
+            LOG.trace("Waiting to delete...");
+
+            try {
+              Thread.sleep(1_000L);
+            } catch (final InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+
+            LOG.trace("Deleting...");
+
+            try {
+              Files.delete(mountDir.resolve("a.txt"));
+            } catch (final IOException e) {
+              throw new RuntimeException(e);
+            }
+
+            LOG.trace("Deleted.");
+          });
+
+        while (true) {
+          final var wk = watch.take();
+          for (final var event : wk.pollEvents()) {
+            final var changed = (Path) event.context();
+            assertEquals(changed, f);
+            return;
+          }
+          wk.reset();
+        }
+      }
+    }
+  }
+
+  @Test
+  public void testDirectoryRename()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath("/", "a");
+      final var q = fs.getPath("/", "b");
+      final var r = fs.getPath("/", "c");
+
+      Files.createDirectory(p);
+      Files.createDirectory(r);
+
+      assertTrue(Files.isDirectory(p));
+      assertFalse(Files.exists(q));
+      assertTrue(Files.isDirectory(r));
+
+      Files.move(p, q);
+
+      assertFalse(Files.exists(p));
+      assertTrue(Files.isDirectory(q));
+      assertTrue(Files.isDirectory(r));
+
+      assertThrows(FileSystemException.class, () -> {
+        Files.move(q, r);
+      });
+      assertTrue(Files.isDirectory(q));
+      assertTrue(Files.isDirectory(r));
+    }
+  }
+
   static FBFilesystem createFS()
   {
     try {
-      return (FBFilesystem) FileSystems.newFileSystem(FSBIND, null);
+      return (FBFilesystem) FileSystems.newFileSystem(
+        FSBIND,
+        Map.of(
+          FBFilesystemProvider.environmentWatchServiceDurationKey(),
+          Duration.ofMillis(250L)
+        )
+      );
     } catch (final IOException e) {
       throw new AssertionError(e);
     }

@@ -17,45 +17,30 @@
 
 package com.io7m.fsbind.core;
 
-import java.io.IOException;
-import java.nio.file.FileSystem;
 import java.nio.file.Path;
-import java.util.List;
+import java.util.Objects;
 
 /**
- * The {@code fsbind} filesystem.
+ * A mounted filesystem.
+ *
+ * @param mountPoint             The position at which the filesystem is mounted
+ * @param externalFilesystemBase The base directory of the external filesystem
  */
 
-public abstract class FBFilesystem
-  extends FileSystem
+public record FBMountedFilesystem(
+  Path mountPoint,
+  Path externalFilesystemBase)
 {
   /**
-   * @return The list of mounted filesystems, in mount order
+   * A mounted filesystem.
+   *
+   * @param mountPoint             The position at which the filesystem is mounted
+   * @param externalFilesystemBase The base directory of the external filesystem
    */
 
-  public abstract List<FBMountedFilesystem> mountedFilesystems();
-
-  /**
-   * Perform a mount request.
-   *
-   * @param mount The request
-   *
-   * @throws IOException On errors
-   */
-
-  public abstract void mount(
-    FBMountRequest mount)
-    throws IOException;
-
-  /**
-   * Unmount a mounted filesystem.
-   *
-   * @param path The path
-   *
-   * @throws IOException On errors
-   */
-
-  public abstract void unmount(
-    Path path)
-    throws IOException;
+  public FBMountedFilesystem
+  {
+    Objects.requireNonNull(mountPoint, "mountPoint");
+    Objects.requireNonNull(externalFilesystemBase, "externalFilesystemBase");
+  }
 }

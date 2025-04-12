@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Objects;
 
 import static com.io7m.fsbind.core.internal.FBFSPathAbsolute.ROOT_NAME;
+import static com.io7m.fsbind.core.internal.FBFSPathComponents.componentsEquals;
 
 /**
  * A relative path.
@@ -91,7 +92,7 @@ public final class FBFSPathRelative implements FBFSPathType
       return false;
     }
     return Objects.equals(this.filesystem, paths.filesystem)
-           && Objects.equals(this.components, paths.components);
+           && componentsEquals(this.components, paths.components);
   }
 
   @Override
@@ -191,7 +192,10 @@ public final class FBFSPathRelative implements FBFSPathType
       return false;
     }
 
-    return prefixPath.components.equals(this.components.subList(0, prefixSize));
+    return componentsEquals(
+      prefixPath.components,
+      this.components.subList(0, prefixSize)
+    );
   }
 
   private FBFSPathRelative checkPath(
@@ -227,7 +231,10 @@ public final class FBFSPathRelative implements FBFSPathType
       return false;
     }
 
-    return suffixPath.components.equals(this.components.subList(thisSize - suffixSize, thisSize));
+    return componentsEquals(
+      suffixPath.components,
+      this.components.subList(thisSize - suffixSize, thisSize)
+    );
   }
 
   @Override
@@ -294,6 +301,6 @@ public final class FBFSPathRelative implements FBFSPathType
   public int compareTo(
     final Path other)
   {
-    return this.toString().compareTo(other.toString());
+    return this.toString().compareToIgnoreCase(other.toString());
   }
 }

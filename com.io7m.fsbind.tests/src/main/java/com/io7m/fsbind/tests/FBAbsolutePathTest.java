@@ -20,6 +20,7 @@ package com.io7m.fsbind.tests;
 import org.junit.jupiter.api.Test;
 
 import java.net.URI;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -51,7 +52,7 @@ public class FBAbsolutePathTest
   }
 
   @Test
-  public void testAbsoluteEqual()
+  public void testAbsoluteEqual0()
     throws Exception
   {
     try (final var fs = createFS()) {
@@ -59,6 +60,17 @@ public class FBAbsolutePathTest
         fs.getPath(fs.getSeparator(),"a", "b", "c"),
         fs.getPath(fs.getSeparator(),"a", "b", "c")
       );
+    }
+  }
+
+  @Test
+  public void testAbsoluteEqual1()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath(fs.getSeparator(), "a", "b", "c");
+      final var q = fs.getPath(fs.getSeparator(), "A", "B", "C");
+      assertEquals(0, p.compareTo(q));
     }
   }
 
@@ -337,22 +349,6 @@ public class FBAbsolutePathTest
   }
 
   @Test
-  public void testAbsoluteRegisterUnsupported()
-    throws Exception
-  {
-    try (final var fs = createFS()) {
-      final var p = fs.getPath(fs.getSeparator(), "a", "b", "c");
-
-      assertThrows(
-        UnsupportedOperationException.class,
-        () -> {
-          p.register(null, null);
-        }
-      );
-    }
-  }
-
-  @Test
   public void testAbsoluteEndsFalse()
     throws Exception
   {
@@ -381,7 +377,7 @@ public class FBAbsolutePathTest
   }
 
   @Test
-  public void testAbsoluteEnds()
+  public void testAbsoluteEnds0()
     throws Exception
   {
     try (final var fs = createFS()) {
@@ -389,6 +385,48 @@ public class FBAbsolutePathTest
       final var q = fs.getPath("b", "c");
       assertTrue(
         p.endsWith(q),
+        "%s ends with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testAbsoluteEnds1()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath(fs.getSeparator(), "a", "b", "c");
+      final var q = fs.getPath("B", "C");
+      assertTrue(
+        p.endsWith(q),
+        "%s ends with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testAbsoluteStarts0()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath(fs.getSeparator(), "a", "b", "c");
+      final var q = fs.getPath(fs.getSeparator(),"A", "B");
+      assertTrue(
+        p.startsWith(q),
+        "%s starts with %s".formatted(p, q)
+      );
+    }
+  }
+
+  @Test
+  public void testAbsoluteStarts1()
+    throws Exception
+  {
+    try (final var fs = createFS()) {
+      final var p = fs.getPath(fs.getSeparator(), "a", "b", "c");
+      final var q = fs.getPath(fs.getSeparator(),"a", "b");
+      assertTrue(
+        p.startsWith(q),
         "%s ends with %s".formatted(p, q)
       );
     }
