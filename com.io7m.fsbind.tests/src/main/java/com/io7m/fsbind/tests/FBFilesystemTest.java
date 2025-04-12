@@ -264,8 +264,13 @@ public final class FBFilesystemTest
   public void testMountZip()
     throws Exception
   {
-    final var zip = this.resource("nested.zip");
-    final var zipUri = URI.create("jar:file:" + zip);
+    final var zip =
+      this.resource("nested.zip");
+    final var zipFileUri =
+      zip.toUri();
+    final var zipUri =
+      URI.create("jar:file:" + zipFileUri.getPath());
+
     try (final var zipfs = FileSystems.newFileSystem(zipUri, Map.of(), null)) {
       try (final var fs = createFS()) {
         final var dir = fs.getPath("/", "a");
@@ -333,8 +338,13 @@ public final class FBFilesystemTest
   public void testMountZipReadOnly()
     throws Exception
   {
-    final var zip = this.resource("nested.zip");
-    final var zipUri = URI.create("jar:file:" + zip);
+    final var zip =
+      this.resource("nested.zip");
+    final var zipFileUri =
+      zip.toUri();
+    final var zipUri =
+      URI.create("jar:file:" + zipFileUri.getPath());
+
     try (final var zipfs = FileSystems.newFileSystem(zipUri, Map.of(), null)) {
       try (final var fs = createFS()) {
         final var dir = fs.getPath("/", "a");
@@ -407,8 +417,10 @@ public final class FBFilesystemTest
   {
     final var zip =
       this.resource("nested.zip");
+    final var zipFileUri =
+      zip.toUri();
     final var zipUri =
-      URI.create("jar:file:" + zip);
+      URI.create("jar:file:" + zipFileUri.getPath());
 
     try (final var zipfs = FileSystems.newFileSystem(zipUri, Map.of(), null)) {
       try (final var fs = createFS()) {
